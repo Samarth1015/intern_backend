@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 // E:\intern_backend\Service\JWTservice\jwtverify.ts
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const db_1 = require("../../client/db");
+const config_1 = require("../../src/config/config");
 class JWTService {
     static async tokenVerify(googleToken) {
         const res = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
@@ -21,8 +22,9 @@ class JWTService {
         }
         return data;
     }
-    static async generateJWT(id) {
-        const secret = process.env.JWT_SECRET || "defaultsecret";
+    static async generateJWT(id, tokenType = "access") {
+        const secret = tokenType === "access" ? config_1.JWT_SECRET : config_1.REFRESH_TOKEN_SECRET;
+        const expiresIn = tokenType === "access" ? "7d" : "7d";
         const user = await db_1.prisma.user.findUnique({ where: { id: id } });
         const payload = {
             id: user?.id,
@@ -31,18 +33,26 @@ class JWTService {
             secretAccessKey: user?.secretAccesskeyId,
         };
         const token = jsonwebtoken_1.default.sign(payload, secret, {
-            expiresIn: "2h",
+            expiresIn,
         });
         return token;
     }
-    static verifyJWT(token) {
-        const secret = process.env.JWT_SECRET || "defaultsecret";
+    static verifyJWT(token, tokenType = "access") {
+        const secret = tokenType === "access" ? config_1.JWT_SECRET : config_1.REFRESH_TOKEN_SECRET;
         try {
-            const decoded = jsonwebtoken_1.default.verify(token, secret);
-            return decoded;
+            return jsonwebtoken_1.default.verify(token, secret);
         }
-        catch (err) {
-            throw new Error("Invalid or expired token");
+        catch (error) {
+            throw error;
+        }
+    }
+    static async refreshAccessToken(refreshToken) {
+        try {
+            const decoded = this.verifyJWT(refreshToken, "refresh");
+            return await this.generateJWT(decoded.id, "access");
+        }
+        catch (error) {
+            throw new Error("Invalid refresh token");
         }
     }
 }

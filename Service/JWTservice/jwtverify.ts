@@ -1,6 +1,7 @@
 // E:\intern_backend\Service\JWTservice\jwtverify.ts
 import jwt from "jsonwebtoken";
 import { prisma } from "../../client/db";
+import { JWT_SECRET, REFRESH_TOKEN_SECRET } from "../../src/config/config";
 
 interface TokenDesign {
   id: number | undefined;
@@ -28,8 +29,12 @@ class JWTService {
     return data;
   }
 
-  public static async generateJWT(id: number): Promise<string> {
-    const secret = process.env.JWT_SECRET || "defaultsecret";
+  public static async generateJWT(
+    id: number,
+    tokenType: "access" | "refresh" = "access"
+  ): Promise<string> {
+    const secret = tokenType === "access" ? JWT_SECRET : REFRESH_TOKEN_SECRET;
+    const expiresIn = tokenType === "access" ? "7d" : "7d";
     const user = await prisma.user.findUnique({ where: { id: id } });
 
     const payload: TokenDesign = {
@@ -40,19 +45,30 @@ class JWTService {
     };
 
     const token = jwt.sign(payload, secret, {
-      expiresIn: "2h",
+      expiresIn,
     });
 
     return token;
   }
 
-  public static verifyJWT(token: string): TokenDesign {
-    const secret = process.env.JWT_SECRET || "defaultsecret";
+  public static verifyJWT(
+    token: string,
+    tokenType: "access" | "refresh" = "access"
+  ): any {
+    const secret = tokenType === "access" ? JWT_SECRET : REFRESH_TOKEN_SECRET;
     try {
-      const decoded = jwt.verify(token, secret) as TokenDesign;
-      return decoded;
-    } catch (err) {
-      throw new Error("Invalid or expired token");
+      return jwt.verify(token, secret);
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  static async refreshAccessToken(refreshToken: string): Promise<string> {
+    try {
+      const decoded = this.verifyJWT(refreshToken, "refresh");
+      return await this.generateJWT(decoded.id, "access");
+    } catch (error) {
+      throw new Error("Invalid refresh token");
     }
   }
 }

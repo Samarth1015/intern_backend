@@ -6,20 +6,34 @@ import { prisma } from "../../../client/db";
 const router = Router();
 
 router.post("/", async (req: any, res: any) => {
-  const email = await req.body.email;
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return res.status(401).json({ error: "Missing or invalid token" });
-  }
+  try {
+    const { email } = req.body;
 
-  const token = authHeader.split(" ")[1];
+    if (!email) {
+      return res.status(400).json({ error: "Email is required" });
+    }
 
-  const user = await prisma.user.findUnique({ where: { id: id } });
-  if (user) {
-    const token = await JWTService.generateJWT(user.id);
-    return res.status(200).json({ present: true, token: token });
+    const user = await prisma.user.findUnique({
+      where: { email: email },
+    });
+
+    if (user) {
+      // Generate both access and refresh tokens
+      const accessToken = await JWTService.generateJWT(user.id, "access");
+      const refreshToken = await JWTService.generateJWT(user.id, "refresh");
+
+      return res.status(200).json({
+        present: true,
+        accessToken: accessToken,
+        refreshToken: refreshToken,
+      });
+    }
+
+    return res.status(200).json({ present: false });
+  } catch (error) {
+    console.error("Error in isCredGiven:", error);
+    return res.status(500).json({ error: "Internal server error" });
   }
-  return res.status(200).json({ present: false });
 });
 
 export default router;

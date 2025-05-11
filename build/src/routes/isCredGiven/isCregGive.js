@@ -9,17 +9,29 @@ const jwtverify_1 = __importDefault(require("../../../Service/JWTservice/jwtveri
 const db_1 = require("../../../client/db");
 const router = (0, express_1.Router)();
 router.post("/", async (req, res) => {
-    const email = await req.body.email;
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-        return res.status(401).json({ error: "Missing or invalid token" });
+    try {
+        const { email } = req.body;
+        if (!email) {
+            return res.status(400).json({ error: "Email is required" });
+        }
+        const user = await db_1.prisma.user.findUnique({
+            where: { email: email },
+        });
+        if (user) {
+            // Generate both access and refresh tokens
+            const accessToken = await jwtverify_1.default.generateJWT(user.id, "access");
+            const refreshToken = await jwtverify_1.default.generateJWT(user.id, "refresh");
+            return res.status(200).json({
+                present: true,
+                accessToken: accessToken,
+                refreshToken: refreshToken,
+            });
+        }
+        return res.status(200).json({ present: false });
     }
-    const token = authHeader.split(" ")[1];
-    const user = await db_1.prisma.user.findUnique({ where: { id: id } });
-    if (user) {
-        const token = await jwtverify_1.default.generateJWT(user.id);
-        return res.status(200).json({ present: true, token: token });
+    catch (error) {
+        console.error("Error in isCredGiven:", error);
+        return res.status(500).json({ error: "Internal server error" });
     }
-    return res.status(200).json({ present: false });
 });
 exports.default = router;

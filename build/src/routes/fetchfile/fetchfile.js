@@ -20,32 +20,45 @@ router.post("/", async (req, res) => {
             return res.status(401).json({ error: "Missing or invalid token" });
         }
         const token = authHeader.split(" ")[1];
-        const { accessKey, secretAccessKey } = jwtverify_1.default.verifyJWT(token);
-        if (!bucket || !accessKey || !secretAccessKey) {
-            return res
-                .status(400)
-                .json({ error: "Missing bucket name or token credentials" });
-        }
-        const s3 = (0, s3client_1.s3ClientPathStyle)(accessKey, secretAccessKey);
-        const command = new client_s3_1.ListObjectsV2Command({ Bucket: bucket.bucket.trim() });
-        const response = await s3.send(command);
-        const files = [];
-        if (response.Contents) {
-            for (const item of response.Contents) {
-                if (item.Key) {
-                    const presignedUrl = await (0, s3_request_presigner_1.getSignedUrl)(s3, new client_s3_1.GetObjectCommand({
-                        Bucket: bucket.bucket.trim(),
-                        Key: item.Key,
-                    }), { expiresIn: 3600 });
-                    files.push({
-                        key: item.Key,
-                        pathStyleUrl: presignedUrl,
-                        virtualHostUrl: undefined,
-                    });
+        try {
+            const { accessKey, secretAccessKey } = jwtverify_1.default.verifyJWT(token);
+            if (!bucket || !accessKey || !secretAccessKey) {
+                return res
+                    .status(400)
+                    .json({ error: "Missing bucket name or token credentials" });
+            }
+            const s3 = (0, s3client_1.s3ClientPathStyle)(accessKey, secretAccessKey);
+            const command = new client_s3_1.ListObjectsV2Command({
+                Bucket: bucket.bucket.trim(),
+            });
+            const response = await s3.send(command);
+            const files = [];
+            if (response.Contents) {
+                for (const item of response.Contents) {
+                    if (item.Key) {
+                        const presignedUrl = await (0, s3_request_presigner_1.getSignedUrl)(s3, new client_s3_1.GetObjectCommand({
+                            Bucket: bucket.bucket.trim(),
+                            Key: item.Key,
+                        }), { expiresIn: 3600 });
+                        files.push({
+                            key: item.Key,
+                            pathStyleUrl: presignedUrl,
+                            virtualHostUrl: undefined,
+                        });
+                    }
                 }
             }
+            return res.json(files);
         }
-        return res.json(files);
+        catch (error) {
+            if (error.name === "TokenExpiredError") {
+                return res.status(401).json({
+                    error: "Token expired",
+                    code: "TOKEN_EXPIRED",
+                });
+            }
+            throw error;
+        }
     }
     catch (error) {
         console.error("Error listing files:", error);
