@@ -1,23 +1,30 @@
-// File: E:/intern_backend/src/routes/fetchfile/fetchfile.ts
+// E:/intern_backend/src/routes/fetchfile/fetchfile.ts
 
 import express from "express";
 import {
   S3Client,
   ListObjectsV2Command,
   GetObjectCommand,
+  BucketAlreadyExists,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import JWTService from "../../../Service/JWTservice/jwtverify";
+import jwt from "jsonwebtoken";
+import { prisma } from "../../../client/db";
 import { s3ClientPathStyle } from "../../../util/s3client";
-interface reqBod {
+import Redisclient from "../../../client/redis";
+
+const router = express.Router();
+
+interface ReqBody {
   bucket: string;
 }
-const router = express.Router();
+
 router.post("/", async (req: any, res: any) => {
   try {
-    // Log the body to check if it's parsed
-    const bucket: reqBod = req.body;
-    console.log("bucket name:", bucket);
+    const { bucket }: ReqBody = req.body;
+    if (!bucket) {
+      return res.status(400).json({ error: "Bucket name is required" });
+    }
 
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
@@ -25,59 +32,54 @@ router.post("/", async (req: any, res: any) => {
     }
 
     const token = authHeader.split(" ")[1];
-    try {
-      const { accessKey, secretAccessKey } = JWTService.verifyJWT(token);
+    const decoded = jwt.decode(token) as { email?: string };
 
-      if (!bucket || !accessKey || !secretAccessKey) {
-        return res
-          .status(400)
-          .json({ error: "Missing bucket name or token credentials" });
-      }
-
-      const s3 = s3ClientPathStyle(accessKey, secretAccessKey);
-      const command = new ListObjectsV2Command({
-        Bucket: bucket.bucket.trim(),
-      });
-
-      const response = await s3.send(command);
-
-      const files: {
-        key: string;
-        pathStyleUrl: string;
-        virtualHostUrl?: string;
-      }[] = [];
-
-      if (response.Contents) {
-        for (const item of response.Contents) {
-          if (item.Key) {
-            const presignedUrl = await getSignedUrl(
-              s3,
-              new GetObjectCommand({
-                Bucket: bucket.bucket.trim(),
-                Key: item.Key,
-              }),
-              { expiresIn: 3600 }
-            );
-
-            files.push({
-              key: item.Key,
-              pathStyleUrl: presignedUrl,
-              virtualHostUrl: undefined,
-            });
-          }
-        }
-      }
-
-      return res.json(files);
-    } catch (error: any) {
-      if (error.name === "TokenExpiredError") {
-        return res.status(401).json({
-          error: "Token expired",
-          code: "TOKEN_EXPIRED",
-        });
-      }
-      throw error;
+    if (!decoded || !decoded.email) {
+      return res.status(401).json({ error: "Invalid token or missing email" });
     }
+
+    const user = await prisma.user.findUnique({
+      where: { email: decoded.email },
+    });
+
+    if (!user?.accessKeyID || !user?.secretAccesskeyId) {
+      return res.status(403).json({ error: "Missing S3 credentials" });
+    }
+
+    const s3 = s3ClientPathStyle(user.accessKeyID, user.secretAccesskeyId);
+    // ---------cacheee part----------
+    // const cachedata = await Redisclient.get(bucket.trim());
+    // if (cachedata) {
+    //   console.log("chache hit");
+    //   const parsedData = await JSON.parse(cachedata);
+
+    //   return res.status(200).json(parsedData.filter(Boolean));
+    // }
+    console.log("cache miss");
+    const command = new ListObjectsV2Command({ Bucket: bucket.trim() });
+    const response = await s3.send(command);
+
+    const files = await Promise.all(
+      (response.Contents || []).map(async (item) => {
+        if (!item.Key) return null;
+        const presignedUrl = await getSignedUrl(
+          s3,
+          new GetObjectCommand({ Bucket: bucket.trim(), Key: item.Key }),
+          { expiresIn: 3600 }
+        );
+
+        return {
+          key: item.Key,
+          pathStyleUrl: presignedUrl,
+        };
+      })
+    );
+
+    await Redisclient.set(bucket, JSON.stringify(files.filter(Boolean)), {
+      EX: 60,
+    });
+
+    return res.json(files.filter(Boolean));
   } catch (error) {
     console.error("Error listing files:", error);
     return res.status(500).json({ error: "Failed to list files" });

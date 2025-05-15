@@ -1,46 +1,80 @@
-// routes/upload.ts
+// E:/intern_backend/src/routes/upload/upload.ts
 
-import express, { Request, Response } from "express";
+import express from "express";
 import multer from "multer";
-import { PutObjectCommand } from "@aws-sdk/client-s3";
-import JWTService from "../../../Service/JWTservice/jwtverify";
+import { GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
+import jwt from "jsonwebtoken";
+import { prisma } from "../../../client/db";
 import { s3ClientPathStyle } from "../../../util/s3client";
+import Redisclient from "../../../client/redis";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
 
 router.post("/", upload.single("file"), async (req: any, res: any) => {
   try {
-    console.log(req.file);
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
       return res.status(401).json({ error: "Missing or invalid token" });
     }
 
     const token = authHeader.split(" ")[1];
-    const { accessKey, secretAccessKey } = JWTService.verifyJWT(token);
+    const decoded = jwt.decode(token) as { email?: string };
 
-    const bucket: string = req.body.bucket;
-    const file = req.file;
-
-    console.log("Received bucket:", bucket);
-    console.log("Received file:", file?.originalname);
-
-    if (!bucket || !file) {
-      return res.status(400).json({ error: "Bucket name or file missing" });
+    if (!decoded || !decoded.email) {
+      return res.status(401).json({ error: "Invalid token or missing email" });
     }
 
-    const s3 = s3ClientPathStyle(accessKey!, secretAccessKey!);
+    const user = await prisma.user.findUnique({
+      where: { email: decoded.email },
+    });
+
+    if (!user?.accessKeyID || !user?.secretAccesskeyId) {
+      return res.status(403).json({ error: "Missing S3 credentials" });
+    }
+
+    const { bucket, path } = req.body;
+    const file = req.file;
+
+    if (!bucket || !file) {
+      return res.status(400).json({ error: "Bucket or file missing" });
+    }
+
+    const s3 = s3ClientPathStyle(user.accessKeyID, user.secretAccesskeyId);
+
+    const key = path || file.originalname;
+    // console.log("===>", key);a
 
     const command = new PutObjectCommand({
       Bucket: bucket.trim(),
-      Key: file.originalname,
+      Key: key,
       Body: file.buffer,
     });
 
-    await s3.send(command);
+    const data = await s3.send(command);
+    // console.log(data);
+    // const presignedUrl = await getSignedUrl(
+    //   s3,
+    //   new GetObjectCommand({ Bucket: bucket.trim(), Key: path }),
+    //   { expiresIn: 3600 }
+    // );
+    // // console.log(presignedUrl);
+    // try {
+    //   const existing = await Redisclient.get(bucket.trim());
+    //   const list = existing ? JSON.parse(existing) : [];
 
-    return res.status(200).json({ message: "File uploaded successfully" });
+    //   list.push({ key: path, pathStyleUrl: presignedUrl });
+
+    //   await Redisclient.set(bucket.trim(), JSON.stringify(list));
+    // } catch (err) {
+    //   console.log(err);
+    // }
+
+    return res.status(200).json({
+      message: "File uploaded successfully",
+      path: key,
+    });
   } catch (error) {
     console.error("Upload error:", error);
     return res.status(500).json({ error: "Failed to upload file" });
